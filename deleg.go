@@ -112,30 +112,32 @@ func delegate() {
 					fmt.Println("HASH TX:", resHash)
 				}
 
-				var valDeleg2 map[string]string
-				valDeleg2 = sdk[iS].GetBalance(sdk[iS].AccAddress)
-				valDeleg2_f32 := cnvStr2Float_18(valDeleg2[nodes[i].Coin])
-				valDeleg2_i64 := int64(math.Floor(float64(valDeleg2_f32))) // в меньшую сторону
-				if valDeleg2_i64 <= 0 {
-					fmt.Println("ERROR: Delegate =0")
-					continue // переходим к другой записи мастернод
-				}
+				if nodes[i].PubKey != "" {
+					var valDeleg2 map[string]string
+					valDeleg2 = sdk[iS].GetBalance(sdk[iS].AccAddress)
+					valDeleg2_f32 := cnvStr2Float_18(valDeleg2[nodes[i].Coin])
+					valDeleg2_i64 := int64(math.Floor(float64(valDeleg2_f32))) // в меньшую сторону
+					if valDeleg2_i64 <= 0 {
+						fmt.Println("ERROR: Delegate =0")
+						continue // переходим к другой записи мастернод
+					}
 
-				delegDt := m.TxDelegateData{
-					Coin:     nodes[i].Coin,
-					PubKey:   nodes[i].PubKey,
-					Stake:    valDeleg2_i64,
-					GasCoin:  conf.CoinNet,
-					GasPrice: 1,
-				}
+					delegDt := m.TxDelegateData{
+						Coin:     nodes[i].Coin,
+						PubKey:   nodes[i].PubKey,
+						Stake:    valDeleg2_i64,
+						GasCoin:  conf.CoinNet,
+						GasPrice: 1,
+					}
 
-				fmt.Println("TX: ", getMinString(sdk[iS].AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
+					fmt.Println("TX: ", getMinString(sdk[iS].AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
 
-				resHash2, err := sdk[iS].TxDelegate(&delegDt)
-				if err != nil {
-					fmt.Println("ERROR:", err.Error())
-				} else {
-					fmt.Println("HASH TX:", resHash2)
+					resHash2, err := sdk[iS].TxDelegate(&delegDt)
+					if err != nil {
+						fmt.Println("ERROR:", err.Error())
+					} else {
+						fmt.Println("HASH TX:", resHash2)
+					}
 				}
 			}
 		}
