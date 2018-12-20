@@ -13,7 +13,7 @@ import (
 	m "github.com/ValidatorCenter/minter-go-sdk"
 )
 
-const tagVaersion = "Validator.Center Autodelegate #0.8"
+const tagVaersion = "Validator.Center Autodelegate #0.9"
 
 var (
 	version string
