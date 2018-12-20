@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math"
+	"net/http"
 	"os"
-	"strings"
 	"time"
-
-	"strconv"
 
 	"github.com/BurntSushi/toml"
 	m "github.com/ValidatorCenter/minter-go-sdk"
@@ -18,23 +18,24 @@ const tagVaersion = "Validator.Center Autodelegate #0.8"
 var (
 	version string
 	conf    Config
-	sdk     []m.SDK
-	nodes   []NodeData
+	sdk     m.SDK
+	nodesX  []AutodelegCfg
+	CoinNet string
 )
 
 type Config struct {
 	Address   string          `toml:"address"`
 	Nodes     [][]interface{} `toml:"nodes"`
-	Accounts  [][]interface{} `toml:"accounts"`
-	CoinNet   string          `toml:"coin_net"`
+	Accounts  []interface{}   `toml:"accounts"`
 	Timeout   int             `toml:"timeout"`
 	MinAmount int             `toml:"min_amount"`
 }
 
-type NodeData struct {
-	PubKey string
-	Prc    int
-	Coin   string
+type AutodelegCfg struct {
+	Address   string `bson:"address" json:"address"`
+	PubKey    string `bson:"pubkey" json:"pubkey"`
+	Coin      string `bson:"coin" json:"coin"`
+	WalletPrc int    `bson:"wallet_prc" json:"wallet_prc"`
 }
 
 func getMinString(bigStr string) string {
@@ -44,116 +45,158 @@ func getMinString(bigStr string) string {
 // делегирование
 func delegate() {
 	var err error
-	for iS, _ := range sdk {
-		var valueBuy map[string]float32
-		valueBuy, _, err = sdk[iS].GetAddress(sdk[iS].AccAddress)
-		if err != nil {
-			fmt.Println("ERROR:", err.Error())
-			continue
-		}
 
-		valueBuy_f32 := valueBuy[conf.CoinNet]
-		fmt.Println("#################################")
-		fmt.Println("DELEGATE: ", valueBuy_f32)
-		// 1bip на прозапас
-		if valueBuy_f32 < float32(conf.MinAmount+1) {
-			fmt.Printf("ERROR: Less than %d%s+1\n", conf.MinAmount, conf.CoinNet)
-			continue // переходим к другой учетной записи
-		}
-		fullDelegCoin := float64(valueBuy_f32 - 1.0) // 1MNT на комиссию
+	var valueBuy map[string]float32
+	valueBuy, _, err = sdk.GetAddress(sdk.AccAddress)
+	if err != nil {
+		fmt.Println("ERROR:", err.Error())
+		return
+	}
 
-		// Цикл делегирования
-		for i, _ := range nodes {
-			if nodes[i].Coin == "" || nodes[i].Coin == conf.CoinNet {
-				// Страндартная монета BIP(MNT)
-				amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение
+	valueBuy_f32 := valueBuy[CoinNet]
+	fmt.Println("#################################")
+	fmt.Println("DELEGATE: ", valueBuy_f32)
+	// 1bip на прозапас
+	if valueBuy_f32 < float32(conf.MinAmount+1) {
+		fmt.Printf("ERROR: Less than %d%s+1\n", conf.MinAmount, CoinNet)
+		return // переходим к другой учетной записи
+	}
+	fullDelegCoin := float64(valueBuy_f32 - 1.0) // 1MNT на комиссию
 
-				delegDt := m.TxDelegateData{
-					Coin:     conf.CoinNet,
-					PubKey:   nodes[i].PubKey,
-					Stake:    float32(amnt_f64),
-					Payload:  tagVaersion,
-					GasCoin:  conf.CoinNet,
-					GasPrice: 1,
-				}
+	// Дублируем, т.к. могут изменится параллельно!
+	nodes := nodesX
 
-				fmt.Println("TX: ", getMinString(sdk[iS].AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), conf.CoinNet)
+	// Цикл делегирования
+	for i, _ := range nodes {
+		if nodes[i].Coin == "" || nodes[i].Coin == CoinNet {
+			// Страндартная монета BIP(MNT)
+			amnt_f64 := fullDelegCoin * float64(nodes[i].WalletPrc) / 100 // в процентном соотношение
 
-				resHash, err := sdk[iS].TxDelegate(&delegDt)
-				if err != nil {
-					fmt.Println("ERROR:", err.Error())
-				} else {
-					fmt.Println("HASH TX:", resHash)
-				}
-			} else {
-				// Кастомная
-				amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение на какую сумму берём кастомных монет
-				amnt_i64 := math.Floor(amnt_f64)                        // в меньшую сторону
-				if amnt_i64 <= 0 {
-					fmt.Println("ERROR: Value to Sell =0")
-					continue // переходим к другой записи мастернод
-				}
-
-				sellDt := m.TxSellCoinData{
-					CoinToBuy:   nodes[i].Coin,
-					CoinToSell:  conf.CoinNet,
-					ValueToSell: float32(amnt_i64),
-					Payload:     tagVaersion,
-					GasCoin:     conf.CoinNet,
-					GasPrice:    1,
-				}
-				fmt.Println("TX: ", getMinString(sdk[iS].AccAddress), fmt.Sprintf("%d%s", int64(amnt_f64), conf.CoinNet), "=>", nodes[i].Coin)
-				resHash, err := sdk[iS].TxSellCoin(&sellDt)
-				if err != nil {
-					fmt.Println("ERROR:", err.Error())
-					continue // переходим к другой записи мастернод
-				} else {
-					fmt.Println("HASH TX:", resHash)
-				}
-
-				// SLEEP!
-				time.Sleep(time.Second * 10) // пауза 10сек, Nonce чтобы в блокчейна +1
-
-				var valDeleg2 map[string]float32
-				valDeleg2, _, err = sdk[iS].GetAddress(sdk[iS].AccAddress)
-				if err != nil {
-					fmt.Println("ERROR:", err.Error())
-					continue
-				}
-
-				valDeleg2_f32 := valDeleg2[nodes[i].Coin]
-				valDeleg2_i64 := math.Floor(float64(valDeleg2_f32)) // в меньшую сторону
-				if valDeleg2_i64 <= 0 {
-					fmt.Println("ERROR: Delegate =0")
-					continue // переходим к другой записи мастернод
-				}
-
-				delegDt := m.TxDelegateData{
-					Coin:     nodes[i].Coin,
-					PubKey:   nodes[i].PubKey,
-					Stake:    float32(valDeleg2_i64),
-					Payload:  tagVaersion,
-					GasCoin:  conf.CoinNet,
-					GasPrice: 1,
-				}
-
-				fmt.Println("TX: ", getMinString(sdk[iS].AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
-
-				resHash2, err := sdk[iS].TxDelegate(&delegDt)
-				if err != nil {
-					fmt.Println("ERROR:", err.Error())
-				} else {
-					fmt.Println("HASH TX:", resHash2)
-				}
+			delegDt := m.TxDelegateData{
+				Coin:     CoinNet,
+				PubKey:   nodes[i].PubKey,
+				Stake:    float32(amnt_f64),
+				Payload:  tagVaersion,
+				GasCoin:  CoinNet,
+				GasPrice: 1,
 			}
+
+			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].WalletPrc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet)
+
+			resHash, err := sdk.TxDelegate(&delegDt)
+			if err != nil {
+				fmt.Println("ERROR:", err.Error())
+			} else {
+				fmt.Println("HASH TX:", resHash)
+			}
+		} else {
+			// Кастомная
+			amnt_f64 := fullDelegCoin * float64(nodes[i].WalletPrc) / 100 // в процентном соотношение на какую сумму берём кастомных монет
+			amnt_i64 := math.Floor(amnt_f64)                              // в меньшую сторону
+			if amnt_i64 <= 0 {
+				fmt.Println("ERROR: Value to Sell =0")
+				continue // переходим к другой записи мастернод
+			}
+
+			sellDt := m.TxSellCoinData{
+				CoinToBuy:   nodes[i].Coin,
+				CoinToSell:  CoinNet,
+				ValueToSell: float32(amnt_i64),
+				Payload:     tagVaersion,
+				GasCoin:     CoinNet,
+				GasPrice:    1,
+			}
+			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%s", int64(amnt_f64), CoinNet), "=>", nodes[i].Coin)
+			resHash, err := sdk.TxSellCoin(&sellDt)
+			if err != nil {
+				fmt.Println("ERROR:", err.Error())
+				continue // переходим к другой записи мастернод
+			} else {
+				fmt.Println("HASH TX:", resHash)
+			}
+
 			// SLEEP!
 			time.Sleep(time.Second * 10) // пауза 10сек, Nonce чтобы в блокчейна +1
+
+			var valDeleg2 map[string]float32
+			valDeleg2, _, err = sdk.GetAddress(sdk.AccAddress)
+			if err != nil {
+				fmt.Println("ERROR:", err.Error())
+				continue
+			}
+
+			valDeleg2_f32 := valDeleg2[nodes[i].Coin]
+			valDeleg2_i64 := math.Floor(float64(valDeleg2_f32)) // в меньшую сторону
+			if valDeleg2_i64 <= 0 {
+				fmt.Println("ERROR: Delegate =0")
+				continue // переходим к другой записи мастернод
+			}
+
+			delegDt := m.TxDelegateData{
+				Coin:     nodes[i].Coin,
+				PubKey:   nodes[i].PubKey,
+				Stake:    float32(valDeleg2_i64),
+				Payload:  tagVaersion,
+				GasCoin:  CoinNet,
+				GasPrice: 1,
+			}
+
+			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].WalletPrc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
+
+			resHash2, err := sdk.TxDelegate(&delegDt)
+			if err != nil {
+				fmt.Println("ERROR:", err.Error())
+			} else {
+				fmt.Println("HASH TX:", resHash2)
+			}
 		}
+		// SLEEP!
+		time.Sleep(time.Second * 10) // пауза 10сек, Nonce чтобы в блокчейна +1
+	}
+}
+
+func GetCfg(addrs string) ([]AutodelegCfg, error) {
+	var data []AutodelegCfg
+	url := fmt.Sprintf("http://localhost:4000/api/v1/autoDeleg/%s", addrs)
+	res, err := http.Get(url)
+	if err != nil {
+		return data, err
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return data, err
+	}
+
+	fmt.Println(string(body))
+
+	json.Unmarshal(body, &data)
+	return data, nil
+}
+
+func _go_newCfg(addrs string) {
+	for { // бесконечный цикл
+		nodes0x, err := GetCfg(addrs)
+		if err != nil {
+			fmt.Println("ERROR: loading config-site:", err.Error())
+		} else {
+			// обновляем параметры
+			nodesX = nodes0x
+		}
+
+		time.Sleep(time.Minute * 3) // пауза 3мин
 	}
 }
 
 func main() {
+	// TODO: Переход с TOML на INI, если нет файла то создается по умолчанию .ini
+	// TODO: При первом запуске под OS c GUI выводить окно ввода приватника, если сервер, то только чтение с INI
+	var err error
 	ConfFileName := "adlg.toml"
+
+	// Базовая монета!
+	CoinNet = m.GetBaseCoin()
 
 	// проверяем есть ли входной параметр/аргумент
 	if len(os.Args) == 2 {
@@ -168,66 +211,36 @@ func main() {
 		fmt.Println("...data from toml file = loaded!")
 	}
 
-	for _, d := range conf.Accounts {
-		str0 := ""
-		str1 := ""
-		ok := true
+	ok := true
 
-		if str0, ok = d[0].(string); !ok {
-			fmt.Println("ERROR: loading toml file:", d[0], "not wallet address")
-			return
-		}
-		if str1, ok = d[1].(string); !ok {
-			fmt.Println("ERROR: loading toml file:", d[1], "not private wallet key")
-			return
-		}
+	d := conf.Accounts
 
-		sdk1 := m.SDK{
-			MnAddress:     conf.Address,
-			AccAddress:    str0,
-			AccPrivateKey: str1,
-		}
-		sdk = append(sdk, sdk1)
+	/*if str0, ok = d[0].(string); !ok {
+		fmt.Println("ERROR: loading toml file:", d[0], "not wallet address")
+		return
+	}*/
+	sdk.MnAddress = conf.Address
+	if sdk.AccPrivateKey, ok = d[1].(string); !ok {
+		fmt.Println("ERROR: loading toml file:", d[1], "not private wallet key")
+		return
 	}
 
-	for _, d := range conf.Nodes {
-		str0 := ""
-		str1 := ""
-		coinX := ""
-		ok := true
-
-		if str0, ok = d[0].(string); !ok {
-			fmt.Println("ERROR: loading toml file:", d[0], "not a masternode public key")
-			return
-		}
-		if str1, ok = d[1].(string); !ok {
-			fmt.Println("ERROR: loading toml file:", d[1], "not a number")
-			return
-		}
-
-		if len(d) == 3 {
-			if coinX, ok = d[2].(string); !ok {
-				fmt.Println("ERROR: loading toml file:", d[2], "not a coin")
-				return
-			}
-			coinX = strings.ToUpper(coinX)
-		}
-
-		int1, err := strconv.Atoi(str1)
-		if err != nil {
-			fmt.Println("ERROR: loading toml file:", str1, "not a number")
-			return
-		}
-
-		n1 := NodeData{
-			PubKey: str0,
-			Prc:    int1,
-			Coin:   coinX,
-		}
-		nodes = append(nodes, n1)
-
-		//fmt.Printf("%#v\n", n1)
+	// Получаем из приватника -> публичный адрес кошелька
+	sdk.AccAddress, err = m.GetAddressPrivateKey(sdk.AccPrivateKey)
+	if err != nil {
+		fmt.Println("ERROR: convert private wallet to wallet address")
+		return
 	}
+
+	// Получаем первый раз настройки с сайта (потом через горутину обновляться будут)
+	nodesX, err = GetCfg(sdk.AccAddress)
+	if err != nil {
+		fmt.Println("ERROR: loading config-site:", err.Error())
+		return
+	}
+
+	// в отдельный поток (горутина)
+	go _go_newCfg(sdk.AccAddress)
 
 	for { // бесконечный цикл
 		delegate()
