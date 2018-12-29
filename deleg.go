@@ -25,6 +25,7 @@ var (
 
 type Config struct {
 	Address   string          `toml:"address"`
+	AddressVC string          `toml:"address_vc"`
 	Nodes     [][]interface{} `toml:"nodes"`
 	Accounts  []interface{}   `toml:"accounts"`
 	Timeout   int             `toml:"timeout"`
@@ -157,7 +158,7 @@ func delegate() {
 
 func GetCfg(addrs string) ([]AutodelegCfg, error) {
 	var data []AutodelegCfg
-	url := fmt.Sprintf("http://localhost:4000/api/v1/autoDeleg/%s", addrs)
+	url := fmt.Sprintf("%s/api/v1/autoDeleg/%s", conf.AddressVC, addrs)
 	res, err := http.Get(url)
 	if err != nil {
 		return data, err
