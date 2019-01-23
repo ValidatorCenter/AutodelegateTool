@@ -7,36 +7,44 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	m "github.com/ValidatorCenter/minter-go-sdk"
+	"github.com/go-ini/ini"
 )
 
-const tagVaersion = "Validator.Center Autodelegate #0.9"
+//TODO: -multisend
+
+const tagVersion = "Validator.Center Autodelegate #0.10"
+const MIN_AMNT_DELEG = 1
+const MIN_TIME_DELEG = 10
 
 var (
 	version string
-	conf    Config
 	sdk     m.SDK
-	nodesX  []AutodelegCfg
-	CoinNet string
+	nodes   []NodeData
+	urlVC   string
+
+	//TODO: получать из платформы VC
+	CoinNet   string
+	MinAmount int
+	Timeout   int
+	Action    bool
 )
 
-type Config struct {
-	Address   string          `toml:"address"`
-	AddressVC string          `toml:"address_vc"`
-	Nodes     [][]interface{} `toml:"nodes"`
-	Accounts  []interface{}   `toml:"accounts"`
-	Timeout   int             `toml:"timeout"`
-	MinAmount int             `toml:"min_amount"`
+type NodeData struct {
+	PubKey string
+	Prc    int
+	Coin   string
 }
 
 type AutodelegCfg struct {
-	Address   string `bson:"address" json:"address"`
-	PubKey    string `bson:"pubkey" json:"pubkey"`
-	Coin      string `bson:"coin" json:"coin"`
-	WalletPrc int    `bson:"wallet_prc" json:"wallet_prc"`
+	Address   string `json:"address"` //TODO: не нужен, убрать из API
+	PubKey    string `json:"pubkey"`
+	Coin      string `json:"coin"`
+	WalletPrc int    `json:"wallet_prc"`
 }
 
 func getMinString(bigStr string) string {
@@ -46,7 +54,6 @@ func getMinString(bigStr string) string {
 // делегирование
 func delegate() {
 	var err error
-
 	var valueBuy map[string]float32
 	valueBuy, _, err = sdk.GetAddress(sdk.AccAddress)
 	if err != nil {
@@ -58,31 +65,28 @@ func delegate() {
 	fmt.Println("#################################")
 	fmt.Println("DELEGATE: ", valueBuy_f32)
 	// 1bip на прозапас
-	if valueBuy_f32 < float32(conf.MinAmount+1) {
-		fmt.Printf("ERROR: Less than %d%s+1\n", conf.MinAmount, CoinNet)
-		return // переходим к другой учетной записи
+	if valueBuy_f32 < float32(MinAmount+1) {
+		fmt.Printf("ERROR: Less than %d%s+1\n", MinAmount, CoinNet)
+		return
 	}
 	fullDelegCoin := float64(valueBuy_f32 - 1.0) // 1MNT на комиссию
-
-	// Дублируем, т.к. могут изменится параллельно!
-	nodes := nodesX
 
 	// Цикл делегирования
 	for i, _ := range nodes {
 		if nodes[i].Coin == "" || nodes[i].Coin == CoinNet {
 			// Страндартная монета BIP(MNT)
-			amnt_f64 := fullDelegCoin * float64(nodes[i].WalletPrc) / 100 // в процентном соотношение
+			amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение
 
 			delegDt := m.TxDelegateData{
 				Coin:     CoinNet,
 				PubKey:   nodes[i].PubKey,
 				Stake:    float32(amnt_f64),
-				Payload:  tagVaersion,
+				Payload:  tagVersion,
 				GasCoin:  CoinNet,
 				GasPrice: 1,
 			}
 
-			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].WalletPrc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet)
+			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet)
 
 			resHash, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
@@ -92,8 +96,8 @@ func delegate() {
 			}
 		} else {
 			// Кастомная
-			amnt_f64 := fullDelegCoin * float64(nodes[i].WalletPrc) / 100 // в процентном соотношение на какую сумму берём кастомных монет
-			amnt_i64 := math.Floor(amnt_f64)                              // в меньшую сторону
+			amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение на какую сумму берём кастомных монет
+			amnt_i64 := math.Floor(amnt_f64)                        // в меньшую сторону
 			if amnt_i64 <= 0 {
 				fmt.Println("ERROR: Value to Sell =0")
 				continue // переходим к другой записи мастернод
@@ -103,7 +107,7 @@ func delegate() {
 				CoinToBuy:   nodes[i].Coin,
 				CoinToSell:  CoinNet,
 				ValueToSell: float32(amnt_i64),
-				Payload:     tagVaersion,
+				Payload:     tagVersion,
 				GasCoin:     CoinNet,
 				GasPrice:    1,
 			}
@@ -137,12 +141,12 @@ func delegate() {
 				Coin:     nodes[i].Coin,
 				PubKey:   nodes[i].PubKey,
 				Stake:    float32(valDeleg2_i64),
-				Payload:  tagVaersion,
+				Payload:  tagVersion,
 				GasCoin:  CoinNet,
 				GasPrice: 1,
 			}
 
-			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].WalletPrc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
+			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
 
 			resHash2, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
@@ -156,99 +160,111 @@ func delegate() {
 	}
 }
 
-func GetCfg(addrs string) ([]AutodelegCfg, error) {
-	var data []AutodelegCfg
-	url := fmt.Sprintf("%s/api/v1/autoDeleg/%s", conf.AddressVC, addrs)
+// обновление данных для делегирования
+func updData() {
+	for { // бесконечный цикл
+		loadData()
+		time.Sleep(time.Minute * 3) // пауза 3мин
+	}
+}
+
+// Загрузка данных с сайта
+func loadData() {
+	url := fmt.Sprintf("%s/api/v1/autoDeleg/%s", sdk.MnAddress, sdk.AccAddress)
 	res, err := http.Get(url)
 	if err != nil {
-		return data, err
+		fmt.Println(err)
+		return
 	}
 	defer res.Body.Close()
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return data, err
+		fmt.Println(err)
+		return
 	}
 
-	fmt.Println(string(body))
-
+	var data []AutodelegCfg
 	json.Unmarshal(body, &data)
-	return data, nil
-}
 
-func _go_newCfg(addrs string) {
-	for { // бесконечный цикл
-		nodes0x, err := GetCfg(addrs)
-		if err != nil {
-			fmt.Println("ERROR: loading config-site:", err.Error())
-		} else {
-			// обновляем параметры
-			nodesX = nodes0x
+	nodes2 := []NodeData{}
+	for _, d := range data {
+		coinX := strings.ToUpper(d.Coin)
+
+		n1 := NodeData{
+			PubKey: d.PubKey,
+			Prc:    d.WalletPrc,
+			Coin:   coinX,
 		}
+		nodes2 = append(nodes2, n1)
 
-		time.Sleep(time.Minute * 3) // пауза 3мин
+		//fmt.Printf("%#v\n", n1)
+	}
+	// обнуляем nodes
+	nodes = nodes2
+
+	//TODO: получать от платформы VC
+	MinAmount = 1
+	Timeout = 10
+	Action = true
+
+	// Проверяем что бы было больше минимума системы
+	if MinAmount < MIN_AMNT_DELEG {
+		MinAmount = MIN_AMNT_DELEG
+	}
+	if Timeout < MIN_TIME_DELEG {
+		Timeout = MIN_TIME_DELEG
 	}
 }
 
 func main() {
-	// TODO: Получение команд на запуск или паузу с сайта!
-	// TODO: Минимальная сумма делегирования, тоже с сайта!
-	// TODO: Переход с TOML на INI, если нет файла то создается по умолчанию .ini
-	// TODO: При первом запуске под OS c GUI выводить окно ввода приватника, если сервер, то только чтение с INI
-	// TODO: Расширить автоделегатор до исполнения задач для валидатора! Т.к. надо их тоже подписывать и исполнять на стороне клиента
-	var err error
-	ConfFileName := "adlg.toml"
+	ConfFileName := "adlg.ini"
 
-	// Базовая монета!
-	CoinNet = m.GetBaseCoin()
+	Action = false
+	MinAmount = MIN_AMNT_DELEG
+	Timeout = MIN_TIME_DELEG
 
 	// проверяем есть ли входной параметр/аргумент
 	if len(os.Args) == 2 {
 		ConfFileName = os.Args[1]
 	}
-	fmt.Printf("TOML=%s\n", ConfFileName)
+	fmt.Printf("INI=%s\n", ConfFileName)
 
-	if _, err := toml.DecodeFile(ConfFileName, &conf); err != nil {
-		fmt.Println("ERROR: loading toml file:", err.Error())
-		return
+	cfg, err := ini.Load(ConfFileName)
+	if err != nil {
+		fmt.Printf("ERROR: loading ini file: %v\n", err)
+		os.Exit(1)
 	} else {
-		fmt.Println("...data from toml file = loaded!")
+		fmt.Println("...data from ini file = loaded!")
 	}
 
-	ok := true
-
-	d := conf.Accounts
-
-	/*if str0, ok = d[0].(string); !ok {
-		fmt.Println("ERROR: loading toml file:", d[0], "not wallet address")
-		return
-	}*/
-	sdk.MnAddress = conf.Address
-	if sdk.AccPrivateKey, ok = d[1].(string); !ok {
-		fmt.Println("ERROR: loading toml file:", d[1], "not private wallet key")
-		return
-	}
-
-	// Получаем из приватника -> публичный адрес кошелька
-	sdk.AccAddress, err = m.GetAddressPrivateKey(sdk.AccPrivateKey)
+	urlVC = cfg.Section("").Key("URL").String()
+	sdk.MnAddress = cfg.Section("").Key("ADDRESS").String()
+	sdk.AccPrivateKey = cfg.Section("").Key("PRIVATKEY").String()
+	PubKey, err := m.GetAddressPrivateKey(sdk.AccPrivateKey)
 	if err != nil {
-		fmt.Println("ERROR: convert private wallet to wallet address")
+		fmt.Println("ERROR: GetAddressPrivateKey", err)
 		return
 	}
 
-	// Получаем первый раз настройки с сайта (потом через горутину обновляться будут)
-	nodesX, err = GetCfg(sdk.AccAddress)
-	if err != nil {
-		fmt.Println("ERROR: loading config-site:", err.Error())
-		return
-	}
+	sdk.AccAddress = PubKey
+	CoinNet = m.GetBaseCoin()
 
-	// в отдельный поток (горутина)
-	go _go_newCfg(sdk.AccAddress)
+	// горутина обновления параметров
+	go updData()
+
+	// TODO:
+	// 1) получать команду старта, команду остановки [Action]
+	// 2) опрашивать сайт на изменение параметров куда делегировать и т.п.
+	// 2.1) Время ожидания между делегированием минимум 10мин (в минутах) [Timeout]
+	// 2.2) Минимальная сумма делегирования минимум 1Bip(Mnt) [MinAmount]
+	// 3) получать данные для распределения прибыли Валидатора (NEW NEXT)
 
 	for { // бесконечный цикл
-		delegate()
-		fmt.Printf("Pause %dmin .... at this moment it is better to interrupt\n", conf.Timeout)
-		time.Sleep(time.Minute * time.Duration(conf.Timeout)) // пауза ~TimeOut~ мин
+		if Action {
+			delegate()
+		}
+		fmt.Printf("Pause %dmin .... at this moment it is better to interrupt\n", Timeout)
+		time.Sleep(time.Minute * time.Duration(Timeout)) // пауза ~TimeOut~ мин
 	}
 }
