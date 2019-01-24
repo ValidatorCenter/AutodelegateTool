@@ -7,15 +7,15 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"strconv"
+
+	//"strconv"
 	"strings"
 	"time"
 
 	m "github.com/ValidatorCenter/minter-go-sdk"
+	"github.com/fatih/color"
 	"github.com/go-ini/ini"
 )
-
-//TODO: -multisend
 
 const tagVersion = "Validator.Center Autodelegate #0.10"
 const MIN_AMNT_DELEG = 1
@@ -47,8 +47,33 @@ type AutodelegCfg struct {
 	WalletPrc int    `json:"wallet_prc"`
 }
 
+// сокращение длинных строк
 func getMinString(bigStr string) string {
 	return fmt.Sprintf("%s...%s", bigStr[:6], bigStr[len(bigStr)-4:len(bigStr)])
+}
+
+// вывод служебного сообщения
+func log(tp string, msg1 string, msg2 interface{}) {
+	timeClr := fmt.Sprintf(color.MagentaString("[%s]"), time.Now().Format("2006-01-02 15:04:05"))
+	msg0 := ""
+	if tp == "ERR" {
+		msg0 = fmt.Sprintf(color.RedString("ERROR: %s"), msg1)
+	} else if tp == "INF" {
+		infTag := fmt.Sprintf(color.YellowString("%s"), msg1)
+		msg0 = fmt.Sprintf("%s: %#v", infTag, msg2)
+	} else if tp == "OK" {
+		msg0 = fmt.Sprintf(color.GreenString("%s"), msg1)
+	} else if tp == "STR" {
+		msg0 = fmt.Sprintf(color.CyanString("%s"), msg1)
+	} else {
+		msg0 = msg1
+	}
+	fmt.Printf("%s %s\n", timeClr, msg0)
+}
+
+// возврат
+func returnOfCommission() {
+	//TODO: multisend
 }
 
 // делегирование
@@ -57,16 +82,16 @@ func delegate() {
 	var valueBuy map[string]float32
 	valueBuy, _, err = sdk.GetAddress(sdk.AccAddress)
 	if err != nil {
-		fmt.Println("ERROR:", err.Error())
+		log("ERR", err.Error(), "")
 		return
 	}
 
 	valueBuy_f32 := valueBuy[CoinNet]
 	fmt.Println("#################################")
-	fmt.Println("DELEGATE: ", valueBuy_f32)
+	log("INF", "DELEGATE", valueBuy_f32)
 	// 1bip на прозапас
 	if valueBuy_f32 < float32(MinAmount+1) {
-		fmt.Printf("ERROR: Less than %d%s+1\n", MinAmount, CoinNet)
+		log("ERR", fmt.Sprintf("Less than %d%s+1", MinAmount, CoinNet), "")
 		return
 	}
 	fullDelegCoin := float64(valueBuy_f32 - 1.0) // 1MNT на комиссию
@@ -86,20 +111,20 @@ func delegate() {
 				GasPrice: 1,
 			}
 
-			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet)
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet))
 
 			resHash, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
-				fmt.Println("ERROR:", err.Error())
+				log("ERR", err.Error(), "")
 			} else {
-				fmt.Println("HASH TX:", resHash)
+				log("OK", fmt.Sprintf("HASH TX: %s", resHash), "")
 			}
 		} else {
 			// Кастомная
 			amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение на какую сумму берём кастомных монет
 			amnt_i64 := math.Floor(amnt_f64)                        // в меньшую сторону
 			if amnt_i64 <= 0 {
-				fmt.Println("ERROR: Value to Sell =0")
+				log("ERR", "Value to Sell =0", "")
 				continue // переходим к другой записи мастернод
 			}
 
@@ -111,13 +136,14 @@ func delegate() {
 				GasCoin:     CoinNet,
 				GasPrice:    1,
 			}
-			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%s", int64(amnt_f64), CoinNet), "=>", nodes[i].Coin)
+
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%s", int64(amnt_f64), CoinNet), "=>", nodes[i].Coin))
 			resHash, err := sdk.TxSellCoin(&sellDt)
 			if err != nil {
-				fmt.Println("ERROR:", err.Error())
+				log("ERR", err.Error(), "")
 				continue // переходим к другой записи мастернод
 			} else {
-				fmt.Println("HASH TX:", resHash)
+				log("OK", fmt.Sprintf("HASH TX: %s", resHash), "")
 			}
 
 			// SLEEP!
@@ -126,14 +152,14 @@ func delegate() {
 			var valDeleg2 map[string]float32
 			valDeleg2, _, err = sdk.GetAddress(sdk.AccAddress)
 			if err != nil {
-				fmt.Println("ERROR:", err.Error())
+				log("ERR", err.Error(), "")
 				continue
 			}
 
 			valDeleg2_f32 := valDeleg2[nodes[i].Coin]
 			valDeleg2_i64 := math.Floor(float64(valDeleg2_f32)) // в меньшую сторону
 			if valDeleg2_i64 <= 0 {
-				fmt.Println("ERROR: Delegate =0")
+				log("ERR", "Delegate =0", "")
 				continue // переходим к другой записи мастернод
 			}
 
@@ -146,13 +172,12 @@ func delegate() {
 				GasPrice: 1,
 			}
 
-			fmt.Println("TX: ", getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin)
-
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin))
 			resHash2, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
-				fmt.Println("ERROR:", err.Error())
+				log("ERR", err.Error(), "")
 			} else {
-				fmt.Println("HASH TX:", resHash2)
+				log("OK", fmt.Sprintf("HASH TX: %s", resHash2), "")
 			}
 		}
 		// SLEEP!
@@ -163,24 +188,24 @@ func delegate() {
 // обновление данных для делегирования
 func updData() {
 	for { // бесконечный цикл
-		loadData()
 		time.Sleep(time.Minute * 3) // пауза 3мин
+		loadData()
 	}
 }
 
 // Загрузка данных с сайта
 func loadData() {
-	url := fmt.Sprintf("%s/api/v1/autoDeleg/%s", sdk.MnAddress, sdk.AccAddress)
+	url := fmt.Sprintf("%s/api/v1/autoDeleg/%s", urlVC, sdk.AccAddress)
 	res, err := http.Get(url)
 	if err != nil {
-		fmt.Println(err)
+		log("ERR", err.Error(), "")
 		return
 	}
 	defer res.Body.Close()
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		fmt.Println(err)
+		log("ERR", err.Error(), "")
 		return
 	}
 
@@ -197,11 +222,10 @@ func loadData() {
 			Coin:   coinX,
 		}
 		nodes2 = append(nodes2, n1)
-
-		//fmt.Printf("%#v\n", n1)
 	}
 	// обнуляем nodes
 	nodes = nodes2
+	log("STR", fmt.Sprintf("Loaded %d rule(s)", len(nodes)), "")
 
 	//TODO: получать от платформы VC
 	MinAmount = 1
@@ -228,14 +252,14 @@ func main() {
 	if len(os.Args) == 2 {
 		ConfFileName = os.Args[1]
 	}
-	fmt.Printf("INI=%s\n", ConfFileName)
+	log("", fmt.Sprintf("INI=%s", ConfFileName), "")
 
 	cfg, err := ini.Load(ConfFileName)
 	if err != nil {
-		fmt.Printf("ERROR: loading ini file: %v\n", err)
+		log("ERR", fmt.Sprintf("loading ini file: %s", err.Error()), "")
 		os.Exit(1)
 	} else {
-		fmt.Println("...data from ini file = loaded!")
+		log("", "...data from ini file = loaded!", "")
 	}
 
 	urlVC = cfg.Section("").Key("URL").String()
@@ -243,13 +267,16 @@ func main() {
 	sdk.AccPrivateKey = cfg.Section("").Key("PRIVATKEY").String()
 	PubKey, err := m.GetAddressPrivateKey(sdk.AccPrivateKey)
 	if err != nil {
-		fmt.Println("ERROR: GetAddressPrivateKey", err)
+		log("ERR", fmt.Sprintf("GetAddressPrivateKey %s", err.Error()), "")
 		return
 	}
 
 	sdk.AccAddress = PubKey
 	CoinNet = m.GetBaseCoin()
 
+	log("STR", fmt.Sprintf("Platform URL: %s\nNode URL: %s\nAddress: %s\nDef. coin: %s", urlVC, sdk.MnAddress, sdk.AccAddress, CoinNet), "")
+
+	loadData()
 	// горутина обновления параметров
 	go updData()
 
@@ -263,8 +290,10 @@ func main() {
 	for { // бесконечный цикл
 		if Action {
 			delegate()
+			returnOfCommission()
 		}
-		fmt.Printf("Pause %dmin .... at this moment it is better to interrupt\n", Timeout)
+
+		log("", fmt.Sprintf("Pause %dmin .... at this moment it is better to interrupt", Timeout), "")
 		time.Sleep(time.Minute * time.Duration(Timeout)) // пауза ~TimeOut~ мин
 	}
 }
