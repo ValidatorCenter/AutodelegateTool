@@ -151,7 +151,7 @@ func returnOfCommission() {
 	var data []NodeTodo
 	json.Unmarshal(body, &data)
 
-	// Есть-ли что возвращать валидатору своим делегатам?
+	// Есть-ли что валидатору возвращать своим делегатам?
 	if len(data) > 0 {
 		fmt.Println("#################################")
 		log("INF", "RETURN", len(data))
@@ -385,8 +385,20 @@ func loadData() {
 	}
 }
 
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return true, err
+}
+
 func main() {
 	ConfFileName := "adlg.ini"
+	textFile := "; Адрес ноды\nADDRESS=https://minter-node-1.testnet.minter.network\n; URL адрес платформы VC\nURL=http://minter.validator.center:4000\n; Приватный ключ аккаунта\nPRIVATKEY=..."
 
 	Action = false
 	MinAmount = MIN_AMNT_DELEG
@@ -396,19 +408,47 @@ func main() {
 	if len(os.Args) == 2 {
 		ConfFileName = os.Args[1]
 	}
-	log("", fmt.Sprintf("INI=%s", ConfFileName), "")
+	log("", fmt.Sprintf("Config file => %s", ConfFileName), "")
+
+	// Проверяем на существование файла конфигурации
+	_, err := os.Stat(ConfFileName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Создаем файл конфигурации
+			file, err := os.Create(ConfFileName) // создаем файл
+			if err != nil {                      // если возникла ошибка
+				log("ERR", fmt.Sprintf("Unable to create file: %s", err.Error()), "")
+				os.Exit(1) // выходим из программы
+			}
+			defer file.Close()
+
+			file.WriteString(textFile)
+			log("OK", "New configuration file created", "")
+		}
+	}
 
 	cfg, err := ini.Load(ConfFileName)
 	if err != nil {
-		log("ERR", fmt.Sprintf("loading ini file: %s", err.Error()), "")
+		log("ERR", fmt.Sprintf("loading config file: %s", err.Error()), "")
 		os.Exit(1)
 	} else {
-		log("", "...data from ini file = loaded!", "")
+		log("", "...data from config file = loaded!", "")
 	}
 
 	urlVC = cfg.Section("").Key("URL").String()
 	sdk.MnAddress = cfg.Section("").Key("ADDRESS").String()
 	sdk.AccPrivateKey = cfg.Section("").Key("PRIVATKEY").String()
+	if sdk.AccPrivateKey == "" || sdk.AccPrivateKey == "..." {
+		// Ввод приватного ключа, если первый запуск (не указан в файле конфигурации)
+		fmt.Print("Input 'PrivatKey': ")
+		fmt.Fscan(os.Stdin, &sdk.AccPrivateKey)
+		if sdk.AccPrivateKey == "" {
+			os.Exit(1)
+		}
+		cfg.Section("").Key("PRIVATKEY").SetValue(sdk.AccPrivateKey)
+		cfg.SaveTo(ConfFileName)
+	}
+
 	PubKey, err := m.GetAddressPrivateKey(sdk.AccPrivateKey)
 	if err != nil {
 		log("ERR", fmt.Sprintf("GetAddressPrivateKey %s", err.Error()), "")
