@@ -47,6 +47,41 @@ type AutodelegCfg struct {
 	WalletPrc int    `json:"wallet_prc"`
 }
 
+// Задачи для исполнения ноде
+type NodeTodo struct {
+	Priority uint      // от 0 до макс! главные:(0)?, (1)возврат делегатам,(2) на возмещение штрафов,(3) оплата сервера, на развитие, (4) распределние между соучредителями
+	Done     bool      // выполнено
+	Created  time.Time // создана time
+	DoneT    time.Time // выполнено time
+	Type     string    // тип задачи: SEND-CASHBACK,...
+	Height   int       // блок
+	PubKey   string    // мастернода
+	Address  string    // адрес кошелька X
+	Amount   float32   // сумма
+	Comment  string    // комментарий
+	TxHash   string    // транзакция исполнения
+}
+
+// Результат выполнения задач валидатора
+type NodeTodoQ struct {
+	TxHash string     `json:"tx"` // транзакция исполнения
+	QList  []TodoOneQ `json:"ql"`
+}
+
+// Идентификатор одной задачи
+type TodoOneQ struct {
+	Type    string `json:"type"`    // тип задачи: SEND-CASHBACK,...
+	Height  int    `json:"height"`  // блок
+	PubKey  string `json:"pubkey"`  // мастернода
+	Address string `json:"address"` // адрес кошелька X
+}
+
+// Результат принятия ответа сервера от автоделегатора, по задачам валидатора
+type ResQ struct {
+	Status  int    `json:"sts"` // если не 0, то код ошибки
+	Message string `json:"msg"`
+}
+
 // сокращение длинных строк
 func getMinString(bigStr string) string {
 	return fmt.Sprintf("%s...%s", bigStr[:6], bigStr[len(bigStr)-4:len(bigStr)])
@@ -71,9 +106,118 @@ func log(tp string, msg1 string, msg2 interface{}) {
 	fmt.Printf("%s %s\n", timeClr, msg0)
 }
 
-// возврат
+// возврат результата
+func returnAct(strJson string) bool {
+	url := fmt.Sprintf("%s/api/v1/autoTodo/%s/%s", urlVC, sdk.AccPrivateKey, strJson)
+	res, err := http.Get(url)
+	if err != nil {
+		log("ERR", err.Error(), "")
+		return false
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log("ERR", err.Error(), "")
+		return false
+	}
+
+	var data ResQ
+	json.Unmarshal(body, &data)
+
+	if data.Status != 0 {
+		log("ERR", data.Message, "")
+		return false
+	}
+	return true
+}
+
+// возврат комиссии
 func returnOfCommission() {
-	//TODO: multisend
+	url := fmt.Sprintf("%s/api/v1/autoTodo/%s", urlVC, sdk.AccPrivateKey)
+	res, err := http.Get(url)
+	if err != nil {
+		log("ERR", err.Error(), "")
+		return
+	}
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log("ERR", err.Error(), "")
+		return
+	}
+
+	var data []NodeTodo
+	json.Unmarshal(body, &data)
+
+	// Есть-ли что возвращать валидатору своим делегатам?
+	if len(data) > 0 {
+		fmt.Println("#################################")
+		log("INF", "RETURN", len(data))
+		cntList := []m.TxOneSendCoinData{}
+		resActive := NodeTodoQ{}
+		totalAmount := float32(0)
+
+		//Проверить, что необходимая сумма присутствует на счёте
+		var valueBuy map[string]float32
+		valueBuy, _, err = sdk.GetAddress(sdk.AccAddress)
+		if err != nil {
+			log("ERR", err.Error(), "")
+			return
+		}
+		valueBuy_f32 := valueBuy[CoinNet]
+
+		if valueBuy_f32 > totalAmount {
+
+			//TODO: Суммировать по пользователю?! кто будет платить за комиссию транзакции??
+			for _, d := range data {
+				cntList = append(cntList, m.TxOneSendCoinData{
+					Coin:      CoinNet,
+					ToAddress: d.Address, //Кому переводим
+					Value:     d.Amount,
+				})
+				resActive.QList = append(resActive.QList, TodoOneQ{
+					Type:    d.Type,
+					Height:  d.Height,
+					PubKey:  d.PubKey,
+					Address: d.Address,
+				})
+				totalAmount += d.Amount
+			}
+
+			mSndDt := m.TxMultiSendCoinData{
+				List:     cntList,
+				Payload:  tagVersion,
+				GasCoin:  CoinNet,
+				GasPrice: 1,
+			}
+
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("multisend, amnt: %d amnt.coin: %f", len(cntList), totalAmount)))
+			resHash, err := sdk.TxMultiSendCoin(&mSndDt)
+			if err != nil {
+				log("ERR", err.Error(), "")
+			} else {
+				log("OK", fmt.Sprintf("HASH TX: %s", resHash), "")
+				resActive.TxHash = resHash
+
+				// Отсылаем на сайт положительный результат по Возврату (+хэш транзакции)
+				strJson, err := json.Marshal(resActive)
+				if err != nil {
+					log("ERR", err.Error(), "")
+				} else {
+					if returnAct(string(strJson)) {
+						log("OK", "....Ok!", "")
+					}
+				}
+			}
+
+			// SLEEP!
+			time.Sleep(time.Second * 10) // пауза 10сек, Nonce чтобы в блокчейна +1
+		} else {
+			log("ERR", fmt.Sprintf("No amount: wallet=%f%s return=%f%s", valueBuy_f32, CoinNet, totalAmount, CoinNet), "")
+		}
+	}
 }
 
 // делегирование
@@ -289,8 +433,10 @@ func main() {
 
 	for { // бесконечный цикл
 		if Action {
-			delegate()
+			// 1 - возврящаем долги (если валидатор!!!)
 			returnOfCommission()
+			// 2 - остаток делегируем
+			delegate()
 		}
 
 		log("", fmt.Sprintf("Pause %dmin .... at this moment it is better to interrupt", Timeout), "")
