@@ -286,7 +286,7 @@ func delegate() {
 				GasPrice:    1,
 			}
 
-			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%s", int64(amnt_f64), CoinNet), "=>", nodes[i].Coin))
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf(" %d%s", int64(amnt_f64), CoinNet), "=>", nodes[i].Coin))
 			resHash, err := sdk.TxSellCoin(&sellDt)
 			if err != nil {
 				log("ERR", err.Error(), "")
@@ -321,7 +321,7 @@ func delegate() {
 				GasPrice: 1,
 			}
 
-			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin))
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf(" %d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", valDeleg2_i64, nodes[i].Coin))
 			resHash2, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
 				log("ERR", err.Error(), "")
