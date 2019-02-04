@@ -242,6 +242,11 @@ func delegate() {
 
 	// Цикл делегирования
 	for i, _ := range nodes {
+		if nodes[i].Prc == 0 {
+			log("ERR", "Prc = 0%", "")
+			continue // переходим к другой записи мастернод
+		}
+
 		if nodes[i].Coin == "" || nodes[i].Coin == CoinNet {
 			// Страндартная монета BIP(MNT)
 			amnt_f64 := fullDelegCoin * float64(nodes[i].Prc) / 100 // в процентном соотношение
@@ -255,7 +260,7 @@ func delegate() {
 				GasPrice: 1,
 			}
 
-			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf("%d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet))
+			log("INF", "TX", fmt.Sprint(getMinString(sdk.AccAddress), fmt.Sprintf(" %d%%", nodes[i].Prc), "=>", getMinString(nodes[i].PubKey), "=", int64(amnt_f64), CoinNet))
 
 			resHash, err := sdk.TxDelegate(&delegDt)
 			if err != nil {
